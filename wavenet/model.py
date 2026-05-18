@@ -10,7 +10,7 @@ def create_variable(name, shape):
     '''Create a convolution filter variable with the specified name and shape,
     and initialize it using Xavier initialition.'''
     # initializer = tf.contrib.layers.xavier_initializer_conv2d()
-    initializer = tf.keras.initializers.GlorotUniform()
+    initializer = tf.keras.initializers.glorot_uniform()
     variable = tf.Variable(initializer(shape=shape), name=name)
     return variable
 

@@ -1,0 +1,8 @@
+tensorflow==2.21.0
+
+librosa==0.11.0
+numpy==1.26.4
+scipy==1.11.4
+soundfile==0.13.1
+tqdm==4.67.1
+matplotlib==3.8.4
