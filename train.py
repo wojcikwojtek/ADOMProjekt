@@ -247,13 +247,15 @@ def main():
         initial_filter_width=wavenet_params["initial_filter_width"],
         histograms=args.histograms,
         global_condition_channels=args.gc_channels,
-        global_condition_cardinality=reader.gc_category_cardinality)
+        global_condition_cardinality=reader.gc_category_cardinality,
+        loss_fun=wavenet_params.get("loss_fun", "default"))
 
     if args.l2_regularization_strength == 0:
         args.l2_regularization_strength = None
     loss = net.loss(input_batch=audio_batch,
                     global_condition_batch=gc_id_batch,
-                    l2_regularization_strength=args.l2_regularization_strength)
+                    l2_regularization_strength=args.l2_regularization_strength,
+                    loss = wavenet_params.get("loss_fun", "default"))
     optimizer = optimizer_factory[args.optimizer](
                     learning_rate=args.learning_rate,
                     momentum=args.momentum)

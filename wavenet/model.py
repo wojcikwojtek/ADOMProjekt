@@ -59,7 +59,8 @@ class WaveNetModel(object):
                  initial_filter_width=32,
                  histograms=False,
                  global_condition_channels=None,
-                 global_condition_cardinality=None):
+                 global_condition_cardinality=None,
+                 loss_fun='default'):
         '''Initializes the WaveNet model.
 
         Args:
@@ -111,6 +112,7 @@ class WaveNetModel(object):
         self.histograms = histograms
         self.global_condition_channels = global_condition_channels
         self.global_condition_cardinality = global_condition_cardinality
+        self.loss_fun = loss_fun
 
         self.receptive_field = WaveNetModel.calculate_receptive_field(
             self.filter_width, self.dilations, self.scalar_input,
@@ -621,7 +623,11 @@ class WaveNetModel(object):
              input_batch,
              global_condition_batch=None,
              l2_regularization_strength=None,
-             name='wavenet'):
+             sample_rate=16000,
+             f_min=300,
+             f_max=4000,
+             name='wavenet',
+             loss='default'):
         '''Creates a WaveNet network and returns the autoencoding loss.
 
         The variables are all scoped to the given name.
@@ -648,38 +654,147 @@ class WaveNetModel(object):
             raw_output = self._create_network(network_input, gc_embedding)
 
             with tf.name_scope('loss'):
-                # Cut off the samples corresponding to the receptive field
-                # for the first predicted sample.
-                target_output = tf.slice(
-                    tf.reshape(
-                        encoded,
-                        [self.batch_size, -1, self.quantization_channels]),
-                    [0, self.receptive_field, 0],
-                    [-1, -1, -1])
-                target_output = tf.reshape(target_output,
-                                           [-1, self.quantization_channels])
-                prediction = tf.reshape(raw_output,
-                                        [-1, self.quantization_channels])
-                loss = tf.nn.softmax_cross_entropy_with_logits(
-                    logits=prediction,
-                    labels=target_output)
-                reduced_loss = tf.reduce_mean(loss)
+                if loss == 'default':
+                    # Cut off the samples corresponding to the receptive field
+                    # for the first predicted sample.
+                    target_output = tf.slice(
+                        tf.reshape(
+                            encoded,
+                            [self.batch_size, -1, self.quantization_channels]),
+                        [0, self.receptive_field, 0],
+                        [-1, -1, -1])
+                    target_output = tf.reshape(target_output,
+                                            [-1, self.quantization_channels])
+                    prediction = tf.reshape(raw_output,
+                                            [-1, self.quantization_channels])
+                    loss = tf.nn.softmax_cross_entropy_with_logits(
+                        logits=prediction,
+                        labels=target_output)
+                    reduced_loss = tf.reduce_mean(loss)
 
-                tf.summary.scalar('loss', reduced_loss)
+                    tf.summary.scalar('loss', reduced_loss)
 
-                if l2_regularization_strength is None:
-                    return reduced_loss
-                else:
-                    # L2 regularization for all trainable parameters
-                    l2_loss = tf.add_n([tf.nn.l2_loss(v)
-                                        for v in tf.trainable_variables()
-                                        if not('bias' in v.name)])
+                    if l2_regularization_strength is None:
+                        return reduced_loss
+                    else:
+                        # L2 regularization for all trainable parameters
+                        l2_loss = tf.add_n([tf.nn.l2_loss(v)
+                                            for v in tf.trainable_variables()
+                                            if not('bias' in v.name)])
 
-                    # Add the regularization term to the loss
-                    total_loss = (reduced_loss +
-                                  l2_regularization_strength * l2_loss)
+                        # Add the regularization term to the loss
+                        total_loss = (reduced_loss +
+                                    l2_regularization_strength * l2_loss)
 
-                    tf.summary.scalar('l2_loss', l2_loss)
-                    tf.summary.scalar('total_loss', total_loss)
+                        tf.summary.scalar('l2_loss', l2_loss)
+                        tf.summary.scalar('total_loss', total_loss)
 
-                    return total_loss
+                        return total_loss
+                elif loss == 'spectral':
+                    # 1. Przygotowanie sygnału docelowego
+                    input_wave_2d = tf.reshape(tf.cast(input_batch, tf.float32), [self.batch_size, -1])
+                    input_wave_2d = tf.where(tf.is_nan(input_wave_2d), tf.zeros_like(input_wave_2d), input_wave_2d)
+                    
+                    target_wave = tf.slice(input_wave_2d, [0, self.receptive_field], [-1, -1])
+                    
+                    # 2. Rekonstrukcja wygenerowanego sygnału z ostrym przycięciem logitów
+                    prediction = tf.reshape(raw_output, [self.batch_size, -1, self.quantization_channels])
+                    
+                    # === BLOKADA EKSPLOZJI LOGITÓW ===
+                    # Ograniczamy logity do bezpiecznego przedziału [-50.0, 50.0]. 
+                    # Zapobiega to powstawaniu NaN w operacjach wykładniczych Softmaxa.
+                    prediction = tf.clip_by_value(prediction, -50.0, 50.0)
+                    
+                    prediction -= tf.reduce_max(prediction, axis=-1, keepdims=True)
+                    probs = tf.nn.softmax(prediction, axis=-1)
+                    
+                    # Dodatkowa ochrona przed idealnym zerem w prawdopodobieństwie
+                    probs = (probs + 1e-9) / (1.0 + 1e-9 * self.quantization_channels)
+                    
+                    mu = float(self.quantization_channels - 1)
+                    q_values = np.arange(self.quantization_channels, dtype=np.float32)
+                    y_values = (2.0 * q_values / mu) - 1.0
+                    x_values = np.sign(y_values) * ((1.0 + mu) ** np.abs(y_values) - 1.0) / mu
+                    bin_linear_values = tf.constant(x_values, dtype=tf.float32)
+                    
+                    predicted_wave = tf.reduce_sum(probs * bin_linear_values, axis=-1)
+                    predicted_wave = tf.clip_by_value(predicted_wave, -1.0, 1.0)
+                    
+                    # Czyścimy na wszelki wypadek, gdyby soft-argmax wypluł coś niestabilnego
+                    predicted_wave = tf.where(tf.is_nan(predicted_wave), tf.zeros_like(predicted_wave), predicted_wave)
+                    
+                    wave_length = tf.shape(target_wave)[1]
+                    
+                    # 3. Definicja konfiguracji STFT
+                    stft_configs = [
+                        {"fft_length": 512, "frame_length": 240, "frame_step": 50},
+                        {"fft_length": 1024, "frame_length": 600, "frame_step": 120},
+                        {"fft_length": 2048, "frame_length": 1200, "frame_step": 240}
+                    ]
+                    
+                    spectral_loss = tf.constant(0.0, dtype=tf.float32)
+                    
+                    for config in stft_configs:
+                        fft_len = config["fft_length"]
+                        frame_len = config["frame_length"]
+                        frame_st = config["frame_step"]
+                        
+                        num_frames = (wave_length - frame_len) // frame_st + 1
+                        safe_length = (num_frames - 1) * frame_st + frame_len
+                        
+                        padded_target = tf.slice(target_wave, [0, 0], [-1, safe_length])
+                        padded_pred = tf.slice(predicted_wave, [0, 0], [-1, safe_length])
+                        
+                        # 4. Obliczenie STFT z potężniejszym epsilonem stabilności (1e-4)
+                        stft_pred_complex = tf.signal.stft(padded_pred, frame_length=frame_len, frame_step=frame_st, fft_length=fft_len)
+                        stft_trgt_complex = tf.signal.stft(padded_target, frame_length=frame_len, frame_step=frame_st, fft_length=fft_len)
+                        
+                        stft_pred = tf.sqrt(tf.square(tf.real(stft_pred_complex)) + tf.square(tf.imag(stft_pred_complex)) + 1e-4)
+                        stft_trgt = tf.sqrt(tf.square(tf.real(stft_trgt_complex)) + tf.square(tf.imag(stft_trgt_complex)) + 1e-4)
+                        
+                        # Awaryjne odcięcie NaN z samych macierzy STFT
+                        stft_pred = tf.where(tf.is_nan(stft_pred), tf.ones_like(stft_pred) * 1e-4, stft_pred)
+                        stft_trgt = tf.where(tf.is_nan(stft_trgt), tf.ones_like(stft_trgt) * 1e-4, stft_trgt)
+                        
+                        # 5. Maska częstotliwościowa
+                        num_bins = fft_len // 2 + 1
+                        frequencies = np.linspace(0, sample_rate / 2, num_bins)
+                        mask_vals = np.where((frequencies >= f_min) & (frequencies <= f_max), 1.0, 0.1).astype(np.float32)
+                        W = tf.constant(mask_vals, dtype=tf.float32)
+                        W = tf.reshape(W, [1, 1, -1])
+                        
+                        # 6. KROK A: Konwergencja spektralna
+                        diff = (stft_trgt - stft_pred) * W
+                        target_masked = stft_trgt * W
+                        
+                        norm_diff = tf.sqrt(tf.reduce_sum(tf.square(diff), axis=[-2, -1]) + 1e-4)
+                        norm_target = tf.sqrt(tf.reduce_sum(tf.square(target_masked), axis=[-2, -1]) + 1e-4)
+                        
+                        sc_loss = tf.reduce_mean(tf.div_no_nan(norm_diff, norm_target))
+                        
+                        # 7. KROK B: Logarytmiczna różnica skali magnitudy
+                        log_trgt = tf.log(stft_trgt)
+                        log_pred = tf.log(stft_pred)
+                        mag_loss = tf.reduce_mean(W * tf.abs(log_trgt - log_pred))
+                        
+                        # Sumowanie składowych z filtrem bezpieczeństwa na wypadek anomalii
+                        step_loss = sc_loss + mag_loss
+                        step_loss = tf.where(tf.is_nan(step_loss), tf.constant(0.0, dtype=tf.float32), step_loss)
+                        
+                        spectral_loss += step_loss
+                    
+                    reduced_loss = spectral_loss
+                    tf.summary.scalar('spectral_loss', reduced_loss)
+                    
+                    reduced_loss = tf.where(tf.is_nan(reduced_loss), tf.constant(10.0, dtype=tf.float32), reduced_loss)
+                    
+                    if l2_regularization_strength is None:
+                        return reduced_loss
+                    else:
+                        l2_loss = tf.add_n([tf.nn.l2_loss(v)
+                                            for v in tf.trainable_variables()
+                                            if not('bias' in v.name)])
+                        total_loss = reduced_loss + l2_regularization_strength * l2_loss
+                        tf.summary.scalar('l2_loss', l2_loss)
+                        tf.summary.scalar('total_loss', total_loss)
+                        return total_loss
