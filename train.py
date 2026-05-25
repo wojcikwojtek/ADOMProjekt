@@ -245,6 +245,7 @@ def main():
         use_biases=wavenet_params["use_biases"],
         scalar_input=wavenet_params["scalar_input"],
         initial_filter_width=wavenet_params["initial_filter_width"],
+        gated_activation=wavenet_params.get("gated_activation", "tanh_sigmoid"),
         histograms=args.histograms,
         global_condition_channels=args.gc_channels,
         global_condition_cardinality=reader.gc_category_cardinality,
@@ -335,6 +336,9 @@ def main():
         coord.request_stop()
         coord.join(threads)
 
+        finish_time = datetime.now()
+        print('Training finished at: {0:%Y-%m-%d %H:%M:%S}'.format(finish_time))
+        print('Program finished.')
 
 if __name__ == '__main__':
     main()

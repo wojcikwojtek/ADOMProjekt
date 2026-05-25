@@ -60,7 +60,8 @@ class WaveNetModel(object):
                  histograms=False,
                  global_condition_channels=None,
                  global_condition_cardinality=None,
-                 loss_fun='default'):
+                 loss_fun='default',
+                 gated_activation='tanh_sigmoid'):
         '''Initializes the WaveNet model.
 
         Args:
@@ -97,6 +98,9 @@ class WaveNetModel(object):
                 categories, where N = global_condition_cardinality. If None,
                 then the global_condition tensor is regarded as a vector which
                 must have dimension global_condition_channels.
+            gated_activation: Name of gated activation variant used in
+                dilated layers. Supported values: tanh_sigmoid, glu,
+                swish_sigmoid, relu_sigmoid.
 
         '''
         self.batch_size = batch_size
@@ -113,11 +117,27 @@ class WaveNetModel(object):
         self.global_condition_channels = global_condition_channels
         self.global_condition_cardinality = global_condition_cardinality
         self.loss_fun = loss_fun
+        self.gated_activation = gated_activation
 
         self.receptive_field = WaveNetModel.calculate_receptive_field(
             self.filter_width, self.dilations, self.scalar_input,
             self.initial_filter_width)
         self.variables = self._create_variables()
+    
+    def _gated_activation(self, output_filter, output_gate):
+        if self.gated_activation == 'tanh_sigmoid':
+            return tf.tanh(output_filter) * tf.sigmoid(output_gate)
+        elif self.gated_activation == 'glu':
+            return output_filter * tf.sigmoid(output_gate)
+        elif self.gated_activation == 'swish_sigmoid':
+            swish = output_filter * tf.sigmoid(output_filter)
+            return swish * tf.sigmoid(output_gate)
+        elif self.gated_activation == 'relu_sigmoid':
+            return tf.nn.relu(output_filter) * tf.sigmoid(output_gate)
+        else:
+            raise ValueError('Unknown gated_activation: {}. Supported values: '
+                             'tanh_sigmoid, glu, swish_sigmoid, '
+                             'relu_sigmoid.'.format(self.gated_activation))
 
     @staticmethod
     def calculate_receptive_field(filter_width, dilations, scalar_input,
@@ -303,7 +323,7 @@ class WaveNetModel(object):
             conv_filter = tf.add(conv_filter, filter_bias)
             conv_gate = tf.add(conv_gate, gate_bias)
 
-        out = tf.tanh(conv_filter) * tf.sigmoid(conv_gate)
+        out = self._gated_activation(conv_filter, conv_gate)
 
         # The 1x1 conv to produce the residual output
         weights_dense = variables['dense']
@@ -383,7 +403,7 @@ class WaveNetModel(object):
             output_filter = output_filter + variables['filter_bias']
             output_gate = output_gate + variables['gate_bias']
 
-        out = tf.tanh(output_filter) * tf.sigmoid(output_gate)
+        out = self._gated_activation(output_filter, output_gate)
 
         weights_dense = variables['dense']
         transformed = tf.matmul(out, weights_dense[0, :, :])
