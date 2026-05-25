@@ -249,7 +249,9 @@ def main():
         histograms=args.histograms,
         global_condition_channels=args.gc_channels,
         global_condition_cardinality=reader.gc_category_cardinality,
-        loss_fun=wavenet_params.get("loss_fun", "default"))
+        loss_fun=wavenet_params.get("loss_fun", "default"),
+        skip_connection_scale=wavenet_params.get("skip_connection_scale",
+                                                1.0))
 
     if args.l2_regularization_strength == 0:
         args.l2_regularization_strength = None

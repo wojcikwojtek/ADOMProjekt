@@ -158,7 +158,9 @@ def main():
         initial_filter_width=wavenet_params['initial_filter_width'],
         gated_activation=wavenet_params.get('gated_activation', 'tanh_sigmoid'),
         global_condition_channels=args.gc_channels,
-        global_condition_cardinality=args.gc_cardinality)
+        global_condition_cardinality=args.gc_cardinality,
+        skip_connection_scale=wavenet_params.get('skip_connection_scale',
+                                                1.0))
 
     samples = tf.placeholder(tf.int32)
 

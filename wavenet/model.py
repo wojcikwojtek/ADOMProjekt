@@ -61,7 +61,8 @@ class WaveNetModel(object):
                  global_condition_channels=None,
                  global_condition_cardinality=None,
                  loss_fun='default',
-                 gated_activation='tanh_sigmoid'):
+                 gated_activation='tanh_sigmoid',
+                 skip_connection_scale=1.0):
         '''Initializes the WaveNet model.
 
         Args:
@@ -101,6 +102,8 @@ class WaveNetModel(object):
             gated_activation: Name of gated activation variant used in
                 dilated layers. Supported values: tanh_sigmoid, glu,
                 swish_sigmoid, relu_sigmoid.
+            skip_connection_scale: Scalar multiplier for all skip connections
+                or a list with one multiplier per dilated layer.
 
         '''
         self.batch_size = batch_size
@@ -118,6 +121,9 @@ class WaveNetModel(object):
         self.global_condition_cardinality = global_condition_cardinality
         self.loss_fun = loss_fun
         self.gated_activation = gated_activation
+        self.skip_connection_scale = skip_connection_scale
+        self._skip_connection_scales = self._normalize_skip_connection_scale(
+            skip_connection_scale)
 
         self.receptive_field = WaveNetModel.calculate_receptive_field(
             self.filter_width, self.dilations, self.scalar_input,
@@ -138,6 +144,17 @@ class WaveNetModel(object):
             raise ValueError('Unknown gated_activation: {}. Supported values: '
                              'tanh_sigmoid, glu, swish_sigmoid, '
                              'relu_sigmoid.'.format(self.gated_activation))
+
+    def _normalize_skip_connection_scale(self, skip_connection_scale):
+        if isinstance(skip_connection_scale, list):
+            if len(skip_connection_scale) != len(self.dilations):
+                raise ValueError('skip_connection_scale list length {} does '
+                                 'not match number of dilated layers {}.'.
+                                 format(len(skip_connection_scale),
+                                        len(self.dilations)))
+            return [float(scale) for scale in skip_connection_scale]
+
+        return [float(skip_connection_scale)] * len(self.dilations)
 
     @staticmethod
     def calculate_receptive_field(filter_width, dilations, scalar_input,
@@ -343,6 +360,11 @@ class WaveNetModel(object):
             transformed = transformed + dense_bias
             skip_contribution = skip_contribution + skip_bias
 
+        skip_scale = self._skip_connection_scales[layer_index]
+        if skip_scale != 1.0:
+            skip_contribution = tf.multiply(
+                skip_contribution, skip_scale, name="skip_scaled")
+
         if self.histograms:
             layer = 'layer{}'.format(layer_index)
             tf.histogram_summary(layer + '_filter', weights_filter)
@@ -414,6 +436,10 @@ class WaveNetModel(object):
         skip_contribution = tf.matmul(out, weights_skip[0, :, :])
         if self.use_biases:
             skip_contribution = skip_contribution + variables['skip_bias']
+
+        skip_scale = self._skip_connection_scales[layer_index]
+        if skip_scale != 1.0:
+            skip_contribution = skip_contribution * skip_scale
 
         return skip_contribution, input_batch + transformed
 

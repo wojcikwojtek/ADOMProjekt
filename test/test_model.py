@@ -126,6 +126,31 @@ def generate_waveforms(sess, net, fast_generation, global_condition):
     return waveforms, global_condition
 
 
+class TestSkipConnectionScaling(tf.test.TestCase):
+    def testScalarScaleExpandsToEveryDilationLayer(self):
+        net = WaveNetModel(batch_size=1,
+                           dilations=[1, 2, 4],
+                           filter_width=2,
+                           residual_channels=4,
+                           dilation_channels=4,
+                           quantization_channels=QUANTIZATION_CHANNELS,
+                           skip_channels=4,
+                           skip_connection_scale=0.5)
+
+        self.assertEqual(net._skip_connection_scales, [0.5, 0.5, 0.5])
+
+    def testPerLayerScaleRequiresOneValuePerDilationLayer(self):
+        with self.assertRaises(ValueError):
+            WaveNetModel(batch_size=1,
+                         dilations=[1, 2, 4],
+                         filter_width=2,
+                         residual_channels=4,
+                         dilation_channels=4,
+                         quantization_channels=QUANTIZATION_CHANNELS,
+                         skip_channels=4,
+                         skip_connection_scale=[1.0, 0.5])
+
+
 def find_nearest(freqs, power_spectrum, frequency):
     # Return the power of the bin nearest to the target frequency.
     index = (np.abs(freqs - frequency)).argmin()

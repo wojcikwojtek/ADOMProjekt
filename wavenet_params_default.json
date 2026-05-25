@@ -10,6 +10,7 @@
     "dilation_channels": 32,
     "quantization_channels": 256,
     "skip_channels": 512,
+    "skip_connection_scale": 1.0,
     "use_biases": true,
     "scalar_input": false,
     "initial_filter_width": 32
