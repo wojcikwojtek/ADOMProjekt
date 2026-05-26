@@ -156,7 +156,7 @@ def main():
         use_biases=wavenet_params['use_biases'],
         scalar_input=wavenet_params['scalar_input'],
         initial_filter_width=wavenet_params['initial_filter_width'],
-        gated_activation=wavenet_params.get('gated_activation', 'tanh_sigmoid'),
+        gated_activation=wavenet_params.get('gated_activation', 'tanh_gated'),
         global_condition_channels=args.gc_channels,
         global_condition_cardinality=args.gc_cardinality,
         skip_connection_scale=wavenet_params.get('skip_connection_scale',

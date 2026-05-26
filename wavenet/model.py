@@ -61,7 +61,7 @@ class WaveNetModel(object):
                  global_condition_channels=None,
                  global_condition_cardinality=None,
                  loss_fun='default',
-                 gated_activation='tanh_sigmoid',
+                 gated_activation='tanh_gated',
                  skip_connection_scale=1.0):
         '''Initializes the WaveNet model.
 
@@ -100,8 +100,8 @@ class WaveNetModel(object):
                 then the global_condition tensor is regarded as a vector which
                 must have dimension global_condition_channels.
             gated_activation: Name of gated activation variant used in
-                dilated layers. Supported values: tanh_sigmoid, glu,
-                swish_sigmoid, relu_sigmoid.
+                dilated layers. Supported values: tanh_gated, glu,
+                swish_gated, relu_sigmoid.
             skip_connection_scale: Scalar multiplier for all skip connections
                 or a list with one multiplier per dilated layer.
 
@@ -131,18 +131,18 @@ class WaveNetModel(object):
         self.variables = self._create_variables()
     
     def _gated_activation(self, output_filter, output_gate):
-        if self.gated_activation == 'tanh_sigmoid':
+        if self.gated_activation == 'tanh_gated':
             return tf.tanh(output_filter) * tf.sigmoid(output_gate)
         elif self.gated_activation == 'glu':
             return output_filter * tf.sigmoid(output_gate)
-        elif self.gated_activation == 'swish_sigmoid':
+        elif self.gated_activation == 'swish_gated':
             swish = output_filter * tf.sigmoid(output_filter)
             return swish * tf.sigmoid(output_gate)
         elif self.gated_activation == 'relu_sigmoid':
             return tf.nn.relu(output_filter) * tf.sigmoid(output_gate)
         else:
             raise ValueError('Unknown gated_activation: {}. Supported values: '
-                             'tanh_sigmoid, glu, swish_sigmoid, '
+                             'tanh_gated, glu, swish_gated, '
                              'relu_sigmoid.'.format(self.gated_activation))
 
     def _normalize_skip_connection_scale(self, skip_connection_scale):
